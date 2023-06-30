@@ -4,6 +4,7 @@ from scipy.optimize import curve_fit, Bounds
 from scipy.stats import linregress
 from matplotlib import pyplot as plt
 import seaborn as sns
+import os
 
 # 2DO: make the code more flexible by enabling usage of custom models
 # Can include some in the library for the GEF-specific case
@@ -19,7 +20,7 @@ class GefFitter:
     ----------
     """
 
-    def __init__(self, data: pd.DataFrame, data_index: pd.DataFrame) -> None:
+    def __init__(self, data: str, data_index: str) -> None:
         """
         data_file should be a path to a .csv file. The code 
         assumes that the first column within this file is time.
@@ -65,7 +66,7 @@ class GefFitter:
         
         conc, GEF_conc, model, perc_curve, date = row.iloc[0]['conc'], row.iloc[0]['GEF_conc'], row.iloc[0]['model'], row.iloc[0]['perc_curve'], row.iloc[0]['date']
         return conc, GEF_conc, model, perc_curve, date
-    
+
     @staticmethod   
     def _linear_model(time: np.ndarray, slope: float, yint: float):
         return (-slope * time) + yint
@@ -195,7 +196,9 @@ class GefFitter:
                     fluorescence_plateau_est
                 ])
                 
-                popt, pconv = curve_fit(GefFitter._exponential_model_with_background, self.time, ydata, bounds=(bounds.lb, bounds.ub), maxfev=2000, p0=initial_guess)
+                # popt, pconv = curve_fit(GefFitter._exponential_model_with_background, self.time, ydata, bounds=(bounds.lb, bounds.ub), maxfev=2000, p0=initial_guess)
+                popt, pconv = curve_fit(GefFitter._exponential_model_with_background, self.time, ydata)
+
 
                 # unpack parameters and organize
                 span_exchange, k_exchange, span_background, k_background, fluorescence_plateau = popt
