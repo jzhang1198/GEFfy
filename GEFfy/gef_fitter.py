@@ -19,7 +19,7 @@ class GefFitter:
     ----------
     """
 
-    def __init__(self, data: str, data_index: str) -> None:
+    def __init__(self, data: pd.DataFrame, data_index: pd.DataFrame) -> None:
         """
         data_file should be a path to a .csv file. The code 
         assumes that the first column within this file is time.
@@ -56,16 +56,16 @@ class GefFitter:
         self.kcat = float
 
     def _map_sample_id(self, sample_id: str):
-        row = self.data_index[self.data_index['sample'] == sample_id].values.tolist()
+        row = self.data_index[self.data_index['sample'] == sample_id]
 
         if len(row) > 1:
             print('WARNING: Duplicate sample IDs detected')
             print('Exited from initialization')
             return 
         
-        _, conc, GEF_conc, model, perc_curve, date = row[0]
+        conc, GEF_conc, model, perc_curve, date = row.iloc[0]['conc'], row.iloc[0]['GEF_conc'], row.iloc[0]['model'], row.iloc[0]['perc_curve'], row.iloc[0]['date']
         return conc, GEF_conc, model, perc_curve, date
-
+    
     @staticmethod   
     def _linear_model(time: np.ndarray, slope: float, yint: float):
         return (-slope * time) + yint
