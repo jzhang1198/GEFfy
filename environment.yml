@@ -1,0 +1,11 @@
+name: GEFfy
+channels:
+  - defaults
+dependencies:
+  - python=3.8.8
+  - matplotlib=3.5.0
+  - pandas=1.4.2
+  - numpy=1.20.3
+  - scipy=1.7.3
+  - seaborn=0.11.2
+prefix: /opt/anaconda3/envs/kinetics-simulator
