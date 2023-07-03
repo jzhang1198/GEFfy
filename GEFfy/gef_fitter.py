@@ -126,7 +126,8 @@ class GefFitter:
                           height_per_plot=10,
                           width_per_plot=10,
                           palette:list=None,
-                          image_path:str=None):
+                          image_path:str=None,
+                          layout:str="portrait"):
         
         # parse through input data to obtain substrate and enzyme concentrations
         slopes, fluorescence_plateaus, k_exchanges, k_backgrounds, span_exchanges, span_backgrounds, pconvs, yints = [], [], [], [], [], [], [], []
@@ -176,6 +177,7 @@ class GefFitter:
 
                 # fit exponential model with background
                 # for some reason, the fitting algorithm has trouble finding reasonable parameters without a good starting guess
+                # idea for automating initial guess estimation: compute derivative to identify inflection point of the function
 
                 span_exchange_est = ydata.max() - ydata.min()
                 k_exchange_est = 7e-3
@@ -196,8 +198,8 @@ class GefFitter:
                     fluorescence_plateau_est
                 ])
                 
-                # popt, pconv = curve_fit(GefFitter._exponential_model_with_background, self.time, ydata, bounds=(bounds.lb, bounds.ub), maxfev=2000, p0=initial_guess)
-                popt, pconv = curve_fit(GefFitter._exponential_model_with_background, self.time, ydata)
+                popt, pconv = curve_fit(GefFitter._exponential_model_with_background, self.time, ydata, bounds=(bounds.lb, bounds.ub), maxfev=2000, p0=initial_guess)
+                # popt, pconv = curve_fit(GefFitter._exponential_model_with_background, self.time, ydata)
 
 
                 # unpack parameters and organize
@@ -227,14 +229,18 @@ class GefFitter:
 
         # 2DO: add some plotting functionality and attributes for storing fit statistics
         if plot:
-            fig, axs = plt.subplots(nrows=len(self.ydatas) + 1, ncols=1, figsize=(width_per_plot, height_per_plot * len(self.ydatas) + 1))
+            if layout == "portrait":
+                fig, axs = plt.subplots(nrows=len(self.ydatas) + 1, ncols=1, figsize=(width_per_plot, height_per_plot * len(self.ydatas) + 1))
+            elif layout == "landscape":
+                fig, axs = plt.subplots(nrows=1, ncols=len(self.ydatas) + 1, figsize=(width_per_plot * len(self.ydatas) + 1, height_per_plot))
+            else:
+                print(f'ERROR: {layout} not a recognized value for layout parameter. Accepted values include: "portrait", "landscape".')
+                                        
             sns.set_style('ticks')
             self._plot_progress_curves_and_fits(axs, xlabel, ylabel, palette)
 
             if image_path:
-                for index, ax in enumerate(axs.flatten()):
-                    name = 'progress_curves' if index == 0 else ax.get_title().split(';')[0]
-                    ax.figure.savefig(os.path.join(image_path, name + '.png'))
+                plt.savefig(image_path, dpi=300)
 
     def fit_conversion_factor(self, plot=False):
         """
