@@ -459,7 +459,7 @@ class GefFitter:
         if plot:
             fig, ax = plt.subplots()
             ax.scatter(substrate_concens, initial_velocities / (gef_conc / 1000), color='black')
-            x = np.linspace(0, substrate_concens[-1] * 2, 1000)
+            x = np.linspace(0, max(substrate_concens) * 2, 1000)
             ax.plot(x, GefFitter._michaelis_menten_model(x, Vmax, Km) / (gef_conc / 1000), '-')      
             ax.set_xlabel('[S] (µM)')
             ax.set_ylabel('Enzyme-Normalized V0 ($s^{-1}$)')  
