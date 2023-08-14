@@ -243,15 +243,15 @@ class GefFitter:
                 return 
             
         # update data index with summary of the fits
-        self.data_index['slope'] = slopes
-        self.data_index['yint'] = yints
-        self.data_index['fluorescence_plateau'] = fluorescence_plateaus
-        self.data_index['k_exchange'] = k_exchanges
-        self.data_index['k_background'] = k_backgrounds
-        self.data_index['span_exchange'] = span_exchanges
-        self.data_index['span_background'] = span_backgrounds
-        self.data_index['pconv'] = pconvs
-        self.data_index['vF0'] = vF0s
+        self.data_index.loc[:, 'slope'] = slopes
+        self.data_index.loc[:, 'yint'] = yints
+        self.data_index.loc[:, 'fluorescence_plateau'] = fluorescence_plateaus
+        self.data_index.loc[:, 'k_exchange'] = k_exchanges
+        self.data_index.loc[:, 'k_background'] = k_backgrounds
+        self.data_index.loc[:, 'span_exchange'] = span_exchanges
+        self.data_index.loc[:, 'span_background'] = span_backgrounds
+        self.data_index.loc[:, 'pconv'] = pconvs
+        self.data_index.loc[:, 'vF0'] = vF0s
 
         # 2DO: add some plotting functionality and attributes for storing fit statistics
         if plot:
