@@ -176,7 +176,8 @@ class GefFitter:
                     initial_guess = np.array([span_exchange_est, k_exchange_est, fluorescence_plateau_est])
 
                     bounds = Bounds(
-                        lb=np.array([span_exchange_est - 0.5 * span_exchange_est, 0, fluorescence_plateau_est - 0.2 * fluorescence_plateau_est])
+                        lb=np.array([span_exchange_est - 0.5 * span_exchange_est, 5e-4, fluorescence_plateau_est - 0.2 * fluorescence_plateau_est]),
+                        ub=np.array([span_exchange_est + 0.5 * span_exchange_est, 0.1, fluorescence_plateau_est + 0.2 * fluorescence_plateau_est])
                     )
 
                     popt, pconv = curve_fit(GefFitter._exponential_model, self.time, ydata, bounds=(bounds.lb, bounds.ub), p0=initial_guess)
