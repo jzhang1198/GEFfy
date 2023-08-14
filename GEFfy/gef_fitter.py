@@ -418,8 +418,8 @@ class GefFitter:
         if plot:
             fig, ax = plt.subplots()
             ax.scatter(F0s, concentrations, color='black')
-            x = np.linspace(0, F0s[-1], 1000)
-            ax.plot(x, (self.conversion_factor_fit.slope * x) + self.conversion_factor_fit.intercept, '-')      
+            x = np.linspace(0, max(F0s), 1000)
+            ax.plot(x, (self.conversion_factor_fit.slope * x) + self.conversion_factor_fit.intercept, color='blue')      
             ax.set_ylabel('Concentration (µM)')
             ax.set_xlabel('Trp Fluorescence (RFUs)')  
             text = '\n'.join([
@@ -427,7 +427,7 @@ class GefFitter:
                 '$y_{int}$ ' + '= {:.2f}'.format(self.conversion_factor_fit.intercept),
                 '$R^2$ = {:.2f}'.format(self.conversion_factor_fit.rvalue)
                 ])
-            ax.text(0.05 * max(x), .8 * max((self.conversion_factor_fit.slope * x) + self.conversion_factor_fit.intercept), text, fontsize=12)
+            ax.text(0.05 * max(x), .8 * max(concentrations), text, fontsize=12)
 
             if image_path:
                 plt.savefig(image_path, dpi=300)
@@ -459,7 +459,7 @@ class GefFitter:
         if plot:
             fig, ax = plt.subplots()
             ax.scatter(substrate_concens, initial_velocities / (gef_conc / 1000), color='black')
-            x = np.linspace(0, substrate_concens[-1] * 2, 1000)
+            x = np.linspace(0, max(substrate_concens) * 2, 1000)
             ax.plot(x, GefFitter._michaelis_menten_model(x, Vmax, Km) / (gef_conc / 1000), '-')      
             ax.set_xlabel('[S] (µM)')
             ax.set_ylabel('Enzyme-Normalized V0 ($s^{-1}$)')  
