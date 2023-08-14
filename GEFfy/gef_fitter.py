@@ -5,6 +5,10 @@ from scipy.stats import linregress
 from matplotlib import pyplot as plt
 import seaborn as sns
 import os
+import warnings
+
+# Mute the SettingWithCopyWarning
+warnings.filterwarnings("ignore", category=pd.core.common.SettingWithCopyWarning)
 
 # 2DO: make the code more flexible by enabling usage of custom models
 # Can include some in the library for the GEF-specific case
@@ -53,6 +57,7 @@ class GefFitter:
         self.data_index = data_index # dynamically updated with fit parameters
 
         # initialize empty attributes to be assigned during fitting
+        self.conversion_factor_fit = None
         self.Km = float
         self.kcat = float
 
@@ -69,8 +74,8 @@ class GefFitter:
     
     def _get_fit_outputs(self, sample_id: str):
         row = self.data_index[self.data_index['sample'] == sample_id]
-        slope, yint, fluorescence_plateau, k_exchange, k_background, span_exchange, span_background, pconv, vF0 = row.iloc[0]['slope'], row.iloc[0]['yint'], row.iloc[0]['fluorescence_plateau'], row.iloc[0]['k_exchange'], row.iloc[0]['k_background'], row.iloc[0]['span_exchange'], row.iloc[0]['span_background'], row.iloc[0]['pconv'], row.iloc[0]['vF0']
-        return slope, yint, fluorescence_plateau, k_exchange, k_background, span_exchange, span_background, pconv
+        slope, F0, fluorescence_plateau, k_exchange, k_background, span_exchange, span_background, pconv, vF0 = row.iloc[0]['slope'], row.iloc[0]['F0'], row.iloc[0]['fluorescence_plateau'], row.iloc[0]['k_exchange'], row.iloc[0]['k_background'], row.iloc[0]['span_exchange'], row.iloc[0]['span_background'], row.iloc[0]['pconv'], row.iloc[0]['vF0']
+        return slope, F0, fluorescence_plateau, k_exchange, k_background, span_exchange, span_background, pconv, vF0
 
     @staticmethod   
     def _linear_model(time: np.ndarray, slope: float, yint: float):
@@ -84,6 +89,10 @@ class GefFitter:
     def _exponential_model(time: np.ndarray, span_exchange: float, k_exchange: float, fluorescence_plateau: float):
         return (span_exchange * np.exp(time * -k_exchange)) + fluorescence_plateau
 
+    @staticmethod
+    def _michaelis_menten_model(substrate_concens: np.ndarray, Vmax: float, Km: float):
+        return np.divide(Vmax * substrate_concens, Km + substrate_concens)
+
     def _plot_progress_curves_and_fits(self, axs, xlabel, ylabel, palette):
 
         if not palette:
@@ -95,7 +104,7 @@ class GefFitter:
         for index, ax in enumerate(axs.flatten()[1:]):
             header = self.headers[index]
             conc, _, model, _, _ = self._get_fit_inputs(header)
-            slope, yint, fluorescence_plateau, k_exchange, k_background, span_exchange, span_background, pconv = self._get_fit_outputs(header)
+            slope, F0, fluorescence_plateau, k_exchange, k_background, span_exchange, span_background, pconv, vF0 = self._get_fit_outputs(header)
             progress_curve = self.ydatas[self.headers.index(header)]
 
             # plot individual progress curve
@@ -106,7 +115,7 @@ class GefFitter:
 
             # plot fit to progress curve
             if model == 'linear_model':
-                y_pred = GefFitter._linear_model(self.time, slope, yint)
+                y_pred = GefFitter._linear_model(self.time, slope, F0)
 
             elif model == 'exponential_model':
                 y_pred = GefFitter._exponential_model(self.time,  span_exchange, k_exchange, fluorescence_plateau)
@@ -139,7 +148,7 @@ class GefFitter:
                           layout:str="portrait"):
         
         # parse through input data to obtain substrate and enzyme concentrations
-        slopes, fluorescence_plateaus, k_exchanges, k_backgrounds, span_exchanges, span_backgrounds, pconvs, yints, vF0s = [], [], [], [], [], [], [], [], []
+        slopes, fluorescence_plateaus, k_exchanges, k_backgrounds, span_exchanges, span_backgrounds, pconvs, vF0s, F0s = [], [], [], [], [], [], [], [], []
         for header, ydata in zip(self.headers, self.ydatas):
             conc, _, fit_type, perc_curve, _ = self._get_fit_inputs(header)
 
@@ -162,9 +171,9 @@ class GefFitter:
                 k_backgrounds.append('NA')
                 span_exchanges.append('NA')
                 span_backgrounds.append('NA')
-                yints.append(yint)
                 pconvs.append(pconv)
                 vF0s.append(slope)
+                F0s.append(yint)
 
             elif fit_type == 'exponential_model':
 
@@ -193,9 +202,9 @@ class GefFitter:
                 k_backgrounds.append('NA')
                 span_exchanges.append(span_exchange)
                 span_backgrounds.append('NA')
-                yints.append('NA')
                 pconvs.append(pconv)
-                vF0s.append(span_exchange * k_exchange * np.exp(k_exchange * 0))            
+                vF0s.append(span_exchange * k_exchange * np.exp(k_exchange * 0))     
+                F0s.append(span_exchange + fluorescence_plateau)       
 
             elif fit_type == 'exponential_model_with_background':
 
@@ -216,11 +225,6 @@ class GefFitter:
                         ub=np.array([span_exchange_est + 0.05 * span_exchange_est, 0.1, ydata.max(), 3e-4, fluorescence_plateau_est + 0.2 * fluorescence_plateau_est])
                     )
 
-                    print(f'Initial Guess and Bounds for {conc}:')
-                    print(initial_guess)
-                    print(bounds)
-                    print('')
-
                     popt, pconv = curve_fit(GefFitter._exponential_model_with_background, self.time, ydata, bounds=(bounds.lb, bounds.ub), p0=initial_guess)
 
                 else:
@@ -234,24 +238,25 @@ class GefFitter:
                 k_backgrounds.append(k_background)
                 span_exchanges.append(span_exchange)
                 span_backgrounds.append(span_background)
-                yints.append('NA')
                 pconvs.append(pconv)
-                vF0s.append(span_exchange * k_exchange * np.exp(k_exchange * 0))           
+                vF0s.append(span_exchange * k_exchange * np.exp(k_exchange * 0))     
+                F0s.append(span_exchange + span_background + fluorescence_plateau)      
 
             else:
                 print(f'Fit type "{fit_type}" not recognized.')
                 return 
             
         # update data index with summary of the fits
-        self.data_index.loc[:, 'slope'] = slopes
-        self.data_index.loc[:, 'yint'] = yints
-        self.data_index.loc[:, 'fluorescence_plateau'] = fluorescence_plateaus
-        self.data_index.loc[:, 'k_exchange'] = k_exchanges
-        self.data_index.loc[:, 'k_background'] = k_backgrounds
-        self.data_index.loc[:, 'span_exchange'] = span_exchanges
-        self.data_index.loc[:, 'span_background'] = span_backgrounds
-        self.data_index.loc[:, 'pconv'] = pconvs
-        self.data_index.loc[:, 'vF0'] = vF0s
+        self.data_index['slope'] = slopes
+        self.data_index['fluorescence_plateau'] = fluorescence_plateaus
+        self.data_index['k_exchange'] = k_exchanges
+        self.data_index['k_background'] = k_backgrounds
+        self.data_index['span_exchange'] = span_exchanges
+        self.data_index['span_background'] = span_backgrounds
+        self.data_index['pconv'] = pconvs
+        self.data_index['vF0'] = vF0s
+        self.data_index['F0'] = F0s
+
 
         # 2DO: add some plotting functionality and attributes for storing fit statistics
         if plot:
@@ -280,7 +285,7 @@ class GefFitter:
                           layout:str="portrait"):
         
         # parse through input data to obtain substrate and enzyme concentrations
-        slopes, fluorescence_plateaus, k_exchanges, k_backgrounds, span_exchanges, span_backgrounds, pconvs, yints, vF0s = [], [], [], [], [], [], [], [], []
+        slopes, fluorescence_plateaus, k_exchanges, k_backgrounds, span_exchanges, span_backgrounds, pconvs, vF0s, F0s = [], [], [], [], [], [], [], [], []
         for header, ydata in zip(self.headers, self.ydatas):
             conc, _, fit_type, perc_curve, _ = self._get_fit_inputs(header)
 
@@ -303,9 +308,9 @@ class GefFitter:
                 k_backgrounds.append('NA')
                 span_exchanges.append('NA')
                 span_backgrounds.append('NA')
-                yints.append(yint)
                 pconvs.append(pconv)
                 vF0s.append(slope)
+                F0s.append(yint)
 
             elif fit_type == 'exponential_model':
                 
@@ -328,9 +333,9 @@ class GefFitter:
                 k_backgrounds.append('NA')
                 span_exchanges.append(span_exchange)
                 span_backgrounds.append('NA')
-                yints.append('NA')
                 pconvs.append(pconv)
                 vF0s.append(span_exchange * k_exchange * np.exp(k_exchange * 0))            
+                F0s.append(span_exchange + fluorescence_plateau)
 
             elif fit_type == 'exponential_model_with_background':
 
@@ -343,11 +348,6 @@ class GefFitter:
                     ub=np.array([span_exchange_est + 0.05 * span_exchange_est, 0.1, ydata.max(), 3e-4, fluorescence_plateau_est + 0.2 * fluorescence_plateau_est])
                 )
 
-                print(f'Initial Guess and Bounds for {conc}:')
-                print(initial_guess)
-                print(bounds)
-                print('')
-
                 popt, pconv = curve_fit(GefFitter._exponential_model_with_background, self.time, ydata, bounds=(bounds.lb, bounds.ub), p0=initial_guess)
 
 
@@ -359,9 +359,9 @@ class GefFitter:
                 k_backgrounds.append(k_background)
                 span_exchanges.append(span_exchange)
                 span_backgrounds.append(span_background)
-                yints.append('NA')
                 pconvs.append(pconv)
-                vF0s.append(span_exchange * k_exchange * np.exp(k_exchange * 0))           
+                vF0s.append(span_exchange * k_exchange * np.exp(k_exchange * 0))   
+                F0s.append(span_exchange + span_background + fluorescence_plateau)       
 
             else:
                 print(f'Fit type "{fit_type}" not recognized.')
@@ -369,7 +369,6 @@ class GefFitter:
             
         # update data index with summary of the fits
         self.data_index['slope'] = slopes
-        self.data_index['yint'] = yints
         self.data_index['fluorescence_plateau'] = fluorescence_plateaus
         self.data_index['k_exchange'] = k_exchanges
         self.data_index['k_background'] = k_backgrounds
@@ -377,6 +376,8 @@ class GefFitter:
         self.data_index['span_background'] = span_backgrounds
         self.data_index['pconv'] = pconvs
         self.data_index['vF0'] = vF0s
+        self.data_index['F0'] = F0s
+
 
         # 2DO: add some plotting functionality and attributes for storing fit statistics
         if plot:
@@ -393,7 +394,7 @@ class GefFitter:
             if image_path:
                 plt.savefig(image_path, dpi=300)
 
-    def fit_conversion_factor(self, plot=False):
+    def fit_conversion_factor(self, plot:bool=False, image_path:str=None):
         """
         Fits a conversion factor to observed data. This will be used to 
         transform the initial rates from RFU/s to µM/s.
@@ -404,15 +405,70 @@ class GefFitter:
         factor through construction of a standard curve.
         """
 
-        concentration = self.data_index['conc'].to_numpy()
-        fluorescence_plateau = self.data_index['fluorescence_plateau'].to_numpy()
-        self.conversion_factor_fit = linregress(concentration, fluorescence_plateau)
+        concentrations = self.data_index['conc'].to_numpy()
+
+        try: 
+            F0s = self.data_index['F0'].to_numpy()
+        except:
+            print('No values for F0 fit. Please fit initial rates before fitting conversion factors.')
+            return
+
+        self.conversion_factor_fit = linregress(F0s, concentrations)
 
         if plot:
             fig, ax = plt.subplots()
-            ax.scatter(concentration, fluorescence_plateau, color='black')
-            x = np.linspace(0, concentration[-1], 1000)
+            ax.scatter(F0s, concentrations, color='black')
+            x = np.linspace(0, F0s[-1], 1000)
             ax.plot(x, (self.conversion_factor_fit.slope * x) + self.conversion_factor_fit.intercept, '-')      
-            ax.set_xlabel('Concentration (µM)')
-            ax.set_ylabel('Trp Fluorescence (RFUs)')  
-            print(self.conversion_factor_fit.rvalue)
+            ax.set_ylabel('Concentration (µM)')
+            ax.set_xlabel('Trp Fluorescence (RFUs)')  
+            text = '\n'.join([
+                'm = {:.2e}'.format(self.conversion_factor_fit.slope),
+                '$y_{int}$ ' + '= {:.2f}'.format(self.conversion_factor_fit.intercept),
+                '$R^2$ = {:.2f}'.format(self.conversion_factor_fit.rvalue)
+                ])
+            ax.text(0.05 * max(x), .8 * max((self.conversion_factor_fit.slope * x) + self.conversion_factor_fit.intercept), text, fontsize=12)
+
+            if image_path:
+                plt.savefig(image_path, dpi=300)
+
+    def fit_michaelis_menten(self, plot:bool=False, image_path:str=None, title:str='GEF-catalyzed Exchange Michaelis-Menten Curve'):
+
+        if not self.conversion_factor_fit or 'vF0' not in self.data_index.columns:
+            print('ERROR: Conversion factors or initial velocities have not yet been fit.')
+            return
+        
+        initial_velocities = self.data_index['vF0'].to_numpy() * self.conversion_factor_fit.slope # convert to molar concentration
+        substrate_concens = self.data_index['conc'].to_numpy() 
+        gef_concs = list(set(self.data_index['GEF_conc']))
+        gef_conc = gef_concs.pop()
+
+        # prepend zeros to substrate and initial velocity arrays
+        initial_velocities = np.concatenate([[0], initial_velocities])
+        substrate_concens = np.concatenate([[0], substrate_concens])
+
+        if len(gef_concs) > 1:
+            print('ERROR: [GEF] varies between experimental groups. You will need to separate progress curves into groups of the same [GEF].')
+            return 
+
+        popt, pconv = curve_fit(GefFitter._michaelis_menten_model, substrate_concens, initial_velocities)
+        Vmax, Km = popt 
+        self.kcat = Vmax / (gef_conc / 1000)
+        self.Km = Km
+
+        if plot:
+            fig, ax = plt.subplots()
+            ax.scatter(substrate_concens, initial_velocities / (gef_conc / 1000), color='black')
+            x = np.linspace(0, substrate_concens[-1] * 2, 1000)
+            ax.plot(x, GefFitter._michaelis_menten_model(x, Vmax, Km) / (gef_conc / 1000), '-')      
+            ax.set_xlabel('[S] (µM)')
+            ax.set_ylabel('Enzyme-Normalized V0 ($s^{-1}$)')  
+
+            title = '\n'.join([
+                title,
+                '$k_{cat}$ = ' + '{:.2f}'.format(self.kcat) + ', $K_m$ = ' + '{:.2f}'.format(self.Km)
+            ])
+            ax.set_title(title)
+
+            if image_path:
+                plt.savefig(image_path, dpi=300)
