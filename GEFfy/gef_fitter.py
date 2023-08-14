@@ -418,8 +418,8 @@ class GefFitter:
         if plot:
             fig, ax = plt.subplots()
             ax.scatter(F0s, concentrations, color='black')
-            x = np.linspace(0, F0s[-1], 1000)
-            ax.plot(x, (self.conversion_factor_fit.slope * x) + self.conversion_factor_fit.intercept, '-')      
+            x = np.linspace(0, max(F0s), 1000)
+            ax.plot(x, (self.conversion_factor_fit.slope * x) + self.conversion_factor_fit.intercept, color='blue')      
             ax.set_ylabel('Concentration (µM)')
             ax.set_xlabel('Trp Fluorescence (RFUs)')  
             text = '\n'.join([
@@ -427,7 +427,7 @@ class GefFitter:
                 '$y_{int}$ ' + '= {:.2f}'.format(self.conversion_factor_fit.intercept),
                 '$R^2$ = {:.2f}'.format(self.conversion_factor_fit.rvalue)
                 ])
-            ax.text(0.05 * max(x), .8 * max((self.conversion_factor_fit.slope * x) + self.conversion_factor_fit.intercept), text, fontsize=12)
+            ax.text(0.05 * max(x), .8 * max(concentrations), text, fontsize=12)
 
             if image_path:
                 plt.savefig(image_path, dpi=300)
