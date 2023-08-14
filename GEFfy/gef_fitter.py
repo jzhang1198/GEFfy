@@ -1,14 +1,13 @@
+import os
 import pandas as pd
 import numpy as np
-from scipy.optimize import curve_fit, Bounds
+import seaborn as sns
+import ipywidgets as widgets
 from scipy.stats import linregress
 from matplotlib import pyplot as plt
-import seaborn as sns
-import os
-import warnings
+from scipy.optimize import curve_fit, Bounds
+from IPython.display import display, clear_output
 
-# Mute the SettingWithCopyWarning
-warnings.filterwarnings("ignore", category=pd.core.common.SettingWithCopyWarning)
 
 # 2DO: make the code more flexible by enabling usage of custom models
 # Can include some in the library for the GEF-specific case
@@ -55,6 +54,7 @@ class GefFitter:
         self.time = data.to_numpy(dtype=np.float64).T[0]
         self.ydatas = data.to_numpy(dtype=np.float64).T[1:]
         self.data_index = data_index # dynamically updated with fit parameters
+        self.current_index= 0 # attribute for interactive plotting
 
         # initialize empty attributes to be assigned during fitting
         self.conversion_factor_fit = None
@@ -135,6 +135,50 @@ class GefFitter:
         main_ax = axs.flatten()[0]
         sns.lineplot(ax=main_ax, data=df, x=xlabel, y=ylabel, hue='[S] (µM)', palette=palette)
         main_ax.set_title('Progress Curves')
+        plt.close()
+
+        # launch an interactive figure
+        self._launch_interactive_figure(axs.flatten())
+
+    def _launch_interactive_figure(self, plots):
+
+        prev_button = widgets.Button(description="Previous")
+        next_button = widgets.Button(description="Next")
+
+        # Output area to display the plots
+        output = widgets.Output()
+
+        def display_plot(index):
+            with output:
+                clear_output(wait=True)
+                fig, ax = plt.subplots(figsize=(8, 6))
+                for line in plots[self.current_index].lines:
+                    new_line = ax.plot(line.get_xdata(), line.get_ydata(), label=line.get_label(), color=line.get_color())
+                    new_line[0].set_linestyle(line.get_linestyle())
+                ax.set_xlim(plots[self.current_index].get_xlim())
+                ax.set_ylim(plots[self.current_index].get_ylim())
+                ax.set_xlabel(plots[self.current_index].get_xlabel())
+                ax.set_ylabel(plots[self.current_index].get_ylabel())
+                ax.set_title(plots[self.current_index].get_title())
+                plt.show()
+
+        def on_prev_button_clicked(b):
+            if self.current_index > 0:
+                self.current_index -= 1
+            display_plot(self.current_index)
+
+        def on_next_button_clicked(b):
+            if self.current_index < len(plots) - 1:
+                self.current_index += 1
+            display_plot(self.current_index)
+
+        # Attach button click event handlers
+        prev_button.on_click(on_prev_button_clicked)
+        next_button.on_click(on_next_button_clicked)
+
+        # Display widgets and initial plot
+        display(widgets.HBox([prev_button, next_button]), output)
+        display_plot(self.current_index)
 
     def fit_initial_rates(self, 
                           initial_guess_and_constraints=False,
@@ -144,8 +188,7 @@ class GefFitter:
                           height_per_plot=10,
                           width_per_plot=10,
                           palette:list=None,
-                          image_path:str=None,
-                          layout:str="portrait"):
+                          image_path:str=None):
         
         # parse through input data to obtain substrate and enzyme concentrations
         slopes, fluorescence_plateaus, k_exchanges, k_backgrounds, span_exchanges, span_backgrounds, pconvs, vF0s, F0s = [], [], [], [], [], [], [], [], []
@@ -260,13 +303,7 @@ class GefFitter:
 
         # 2DO: add some plotting functionality and attributes for storing fit statistics
         if plot:
-            if layout == "portrait":
-                fig, axs = plt.subplots(nrows=len(self.ydatas) + 1, ncols=1, figsize=(width_per_plot, height_per_plot * len(self.ydatas) + 1))
-            elif layout == "landscape":
-                fig, axs = plt.subplots(nrows=1, ncols=len(self.ydatas) + 1, figsize=(width_per_plot * len(self.ydatas) + 1, height_per_plot))
-            else:
-                print(f'ERROR: {layout} not a recognized value for layout parameter. Accepted values include: "portrait", "landscape".')
-                                        
+            fig, axs = plt.subplots(nrows=len(self.ydatas) + 1, ncols=1, figsize=(width_per_plot, height_per_plot * len(self.ydatas) + 1))                   
             sns.set_style('ticks')
             self._plot_progress_curves_and_fits(axs, xlabel, ylabel, palette)
 
