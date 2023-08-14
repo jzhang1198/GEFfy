@@ -8,6 +8,11 @@ from matplotlib import pyplot as plt
 from scipy.optimize import curve_fit, Bounds
 from IPython.display import display, clear_output
 
+# mute annoying pandas warnings
+import warnings
+warnings.filterwarnings("ignore", category=pd.core.common.SettingWithCopyWarning)
+
+
 
 # 2DO: make the code more flexible by enabling usage of custom models
 # Can include some in the library for the GEF-specific case
