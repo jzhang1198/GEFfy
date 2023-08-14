@@ -47,7 +47,7 @@ class GefFitter:
         """
 
         # get data
-        self.headers = data.columns[1:]
+        self.headers = data.columns[1:].to_list()
         self.time = data.to_numpy(dtype=np.float64).T[0]
         self.ydatas = data.to_numpy(dtype=np.float64).T[1:]
         self.data_index = data_index # dynamically updated with fit parameters
@@ -56,7 +56,7 @@ class GefFitter:
         self.Km = float
         self.kcat = float
 
-    def _map_sample_id(self, sample_id: str):
+    def _get_fit_inputs(self, sample_id: str):
         row = self.data_index[self.data_index['sample'] == sample_id]
 
         if len(row) > 1:
@@ -66,6 +66,11 @@ class GefFitter:
         
         conc, GEF_conc, model, perc_curve, date = row.iloc[0]['conc'], row.iloc[0]['GEF_conc'], row.iloc[0]['model'], row.iloc[0]['perc_curve'], row.iloc[0]['date']
         return conc, GEF_conc, model, perc_curve, date
+    
+    def _get_fit_outputs(self, sample_id: str):
+        row = self.data_index[self.data_index['sample'] == sample_id]
+        slope, yint, fluorescence_plateau, k_exchange, k_background, span_exchange, span_background, pconv, vF0 = row.iloc[0]['slope'], row.iloc[0]['yint'], row.iloc[0]['fluorescence_plateau'], row.iloc[0]['k_exchange'], row.iloc[0]['k_background'], row.iloc[0]['span_exchange'], row.iloc[0]['span_background'], row.iloc[0]['pconv'], row.iloc[0]['vF0']
+        return slope, yint, fluorescence_plateau, k_exchange, k_background, span_exchange, span_background, pconv
 
     @staticmethod   
     def _linear_model(time: np.ndarray, slope: float, yint: float):
@@ -87,11 +92,34 @@ class GefFitter:
 
         # re-format the data for seaborn plotting
         label_list, time_list, progress_list = [], [], []
-        for index, label in enumerate(self.data_index['conc'].values.tolist()):
-            progress_curve = self.ydatas[index]
-            label_list += [label] * len(progress_curve)
+        for index, ax in enumerate(axs.flatten()[1:]):
+            header = self.headers[index]
+            conc, _, model, _, _ = self._get_fit_inputs(header)
+            slope, yint, fluorescence_plateau, k_exchange, k_background, span_exchange, span_background, pconv = self._get_fit_outputs(header)
+            progress_curve = self.ydatas[self.headers.index(header)]
+
+            # plot individual progress curve
+            ax.set_title('{}; [S]={}µM'.format(header, conc))
+            ax.set_xlabel(xlabel)
+            ax.set_ylabel(ylabel)
+            ax.plot(self.time, progress_curve, color=palette[index])
+
+            # plot fit to progress curve
+            if model == 'linear_model':
+                y_pred = GefFitter._linear_model(self.time, slope, yint)
+
+            elif model == 'exponential_model':
+                y_pred = GefFitter._exponential_model(self.time,  span_exchange, k_exchange, fluorescence_plateau)
+
+            elif model == 'exponential_model_with_background':
+                y_pred = GefFitter._exponential_model_with_background(self.time, span_exchange, k_exchange, span_background, k_background, fluorescence_plateau)
+
+            ax.plot(self.time, y_pred, color='black')
+
+            label_list += [conc] * len(progress_curve)
             time_list += list(self.time) 
             progress_list += list(progress_curve)
+
         df = pd.DataFrame({'[S] (µM)': label_list, ylabel: progress_list, xlabel: time_list})
         
         # plot all progress curves on the main plot
@@ -99,27 +127,8 @@ class GefFitter:
         sns.lineplot(ax=main_ax, data=df, x=xlabel, y=ylabel, hue='[S] (µM)', palette=palette)
         main_ax.set_title('Progress Curves')
 
-        # plot progress curves individually with their fits
-        for index, ax in enumerate(axs.flatten()[1:]):
-            fit_summary = self.data_index.iloc[index]
-
-            ax.set_title('{}; [S]={}µM'.format(fit_summary['sample'], fit_summary['conc']))
-            ax.set_xlabel(xlabel)
-            ax.set_ylabel(ylabel)
-            ax.plot(self.time, self.ydatas[index], color=palette[index])
-
-            if fit_summary['model'] == 'linear_model':
-                y_pred = GefFitter._linear_model(self.time, fit_summary['slope'], fit_summary['yint'])
-
-            elif fit_summary['model'] == 'exponential_model':
-                y_pred = GefFitter._exponential_model(self.time, fit_summary['span_exchange'], fit_summary['k_exchange'], fit_summary['fluorescence_plateau'])
-
-            elif fit_summary['model'] == 'exponential_model_with_background':
-                y_pred = GefFitter._exponential_model(self.time, fit_summary['span_exchange'], fit_summary['k_exchange'], fit_summary['fluorescence_plateau'])
-
-            ax.plot(self.time, y_pred, color='black')
-
     def fit_initial_rates(self, 
+                          initial_guess_and_constraints=False,
                           plot=False, 
                           xlabel="Time (s)",
                           ylabel="Trp Fluorescence (RFUs)",
@@ -130,9 +139,9 @@ class GefFitter:
                           layout:str="portrait"):
         
         # parse through input data to obtain substrate and enzyme concentrations
-        slopes, fluorescence_plateaus, k_exchanges, k_backgrounds, span_exchanges, span_backgrounds, pconvs, yints = [], [], [], [], [], [], [], []
+        slopes, fluorescence_plateaus, k_exchanges, k_backgrounds, span_exchanges, span_backgrounds, pconvs, yints, vF0s = [], [], [], [], [], [], [], [], []
         for header, ydata in zip(self.headers, self.ydatas):
-            _, _, fit_type, perc_curve, _ = self._map_sample_id(header)
+            conc, _, fit_type, perc_curve, _ = self._get_fit_inputs(header)
 
             if fit_type == 'linear_model':
 
@@ -155,12 +164,25 @@ class GefFitter:
                 span_backgrounds.append('NA')
                 yints.append(yint)
                 pconvs.append(pconv)
+                vF0s.append(slope)
 
             elif fit_type == 'exponential_model':
 
-                # fit exponential model
-                bounds = Bounds(np.array([0, 0, 0]), np.array([np.inf, np.inf, np.inf]))
-                popt, pconv = curve_fit(GefFitter._exponential_model, self.time, ydata, bounds=(bounds.lb, bounds.ub))
+                # generate initial guess and constraints, if appropriate, and then fit
+                if initial_guess_and_constraints:
+                    span_exchange_est = ydata.max() - ydata.min()
+                    k_exchange_est = 7e-3
+                    fluorescence_plateau_est = ydata.min()
+                    initial_guess = np.array([span_exchange_est, k_exchange_est, fluorescence_plateau_est])
+
+                    bounds = Bounds(
+                        lb=np.array([span_exchange_est - 0.5 * span_exchange_est, 0, fluorescence_plateau_est - 0.2 * fluorescence_plateau_est])
+                    )
+
+                    popt, pconv = curve_fit(GefFitter._exponential_model, self.time, ydata, bounds=(bounds.lb, bounds.ub), p0=initial_guess)
+                
+                else:   
+                    popt, pconv = curve_fit(GefFitter._exponential_model, self.time, ydata)
 
                 # unpack parameters and organize
                 span_exchange, k_exchange, fluorescence_plateau = popt
@@ -171,7 +193,8 @@ class GefFitter:
                 span_exchanges.append(span_exchange)
                 span_backgrounds.append('NA')
                 yints.append('NA')
-                pconvs.append(pconv)            
+                pconvs.append(pconv)
+                vF0s.append(span_exchange * k_exchange * np.exp(k_exchange * 0))            
 
             elif fit_type == 'exponential_model_with_background':
 
@@ -179,28 +202,28 @@ class GefFitter:
                 # for some reason, the fitting algorithm has trouble finding reasonable parameters without a good starting guess
                 # idea for automating initial guess estimation: compute derivative to identify inflection point of the function
 
-                span_exchange_est = ydata.max() - ydata.min()
-                k_exchange_est = 7e-3
-                span_background_est = 0.2 * span_exchange_est
-                k_background_est = 1e-4 
-                fluorescence_plateau_est = ydata.min()
+                if initial_guess_and_constraints:
+                    span_exchange_est = ydata.max() - ydata.min()
+                    k_exchange_est = 7e-3
+                    span_background_est = 0.2 * span_exchange_est
+                    k_background_est = 1e-4 
+                    fluorescence_plateau_est = ydata.min()
+                    initial_guess = np.array([span_exchange_est, k_exchange_est, span_background_est, k_background_est, fluorescence_plateau_est])
 
-                bounds = Bounds(
-                    lb=np.array([span_exchange_est - 0.05 * span_exchange_est, 5e-4, 0, 1e-5, fluorescence_plateau_est - 0.2 * fluorescence_plateau_est]), 
-                    ub=np.array([span_exchange_est + 0.05 * span_exchange_est, 0.1, ydata.max(), 3e-4, fluorescence_plateau_est + 0.2 * fluorescence_plateau_est])
+                    bounds = Bounds(
+                        lb=np.array([span_exchange_est - 0.05 * span_exchange_est, 5e-4, 0, 1e-5, fluorescence_plateau_est - 0.2 * fluorescence_plateau_est]), 
+                        ub=np.array([span_exchange_est + 0.05 * span_exchange_est, 0.1, ydata.max(), 3e-4, fluorescence_plateau_est + 0.2 * fluorescence_plateau_est])
                     )
-                
-                initial_guess = np.array([
-                    span_exchange_est,
-                    k_exchange_est,
-                    span_background_est,
-                    k_background_est,
-                    fluorescence_plateau_est
-                ])
-                
-                popt, pconv = curve_fit(GefFitter._exponential_model_with_background, self.time, ydata, bounds=(bounds.lb, bounds.ub), maxfev=2000, p0=initial_guess)
-                # popt, pconv = curve_fit(GefFitter._exponential_model_with_background, self.time, ydata)
 
+                    print(f'Initial Guess and Bounds for {conc}:')
+                    print(initial_guess)
+                    print(bounds)
+                    print('')
+
+                    popt, pconv = curve_fit(GefFitter._exponential_model_with_background, self.time, ydata, bounds=(bounds.lb, bounds.ub), p0=initial_guess)
+
+                else:
+                    popt, pconv = curve_fit(GefFitter._exponential_model_with_background, self.time, ydata, maxfev=2000)
 
                 # unpack parameters and organize
                 span_exchange, k_exchange, span_background, k_background, fluorescence_plateau = popt
@@ -211,7 +234,8 @@ class GefFitter:
                 span_exchanges.append(span_exchange)
                 span_backgrounds.append(span_background)
                 yints.append('NA')
-                pconvs.append(pconv)      
+                pconvs.append(pconv)
+                vF0s.append(span_exchange * k_exchange * np.exp(k_exchange * 0))           
 
             else:
                 print(f'Fit type "{fit_type}" not recognized.')
@@ -226,6 +250,132 @@ class GefFitter:
         self.data_index['span_exchange'] = span_exchanges
         self.data_index['span_background'] = span_backgrounds
         self.data_index['pconv'] = pconvs
+        self.data_index['vF0'] = vF0s
+
+        # 2DO: add some plotting functionality and attributes for storing fit statistics
+        if plot:
+            if layout == "portrait":
+                fig, axs = plt.subplots(nrows=len(self.ydatas) + 1, ncols=1, figsize=(width_per_plot, height_per_plot * len(self.ydatas) + 1))
+            elif layout == "landscape":
+                fig, axs = plt.subplots(nrows=1, ncols=len(self.ydatas) + 1, figsize=(width_per_plot * len(self.ydatas) + 1, height_per_plot))
+            else:
+                print(f'ERROR: {layout} not a recognized value for layout parameter. Accepted values include: "portrait", "landscape".')
+                                        
+            sns.set_style('ticks')
+            self._plot_progress_curves_and_fits(axs, xlabel, ylabel, palette)
+
+            if image_path:
+                plt.savefig(image_path, dpi=300)
+
+    def fit_initial_rates_manual_guess(self, 
+                          initial_guesses: pd.DataFrame,
+                          plot=False, 
+                          xlabel="Time (s)",
+                          ylabel="Trp Fluorescence (RFUs)",
+                          height_per_plot=10,
+                          width_per_plot=10,
+                          palette:list=None,
+                          image_path:str=None,
+                          layout:str="portrait"):
+        
+        # parse through input data to obtain substrate and enzyme concentrations
+        slopes, fluorescence_plateaus, k_exchanges, k_backgrounds, span_exchanges, span_backgrounds, pconvs, yints, vF0s = [], [], [], [], [], [], [], [], []
+        for header, ydata in zip(self.headers, self.ydatas):
+            conc, _, fit_type, perc_curve, _ = self._get_fit_inputs(header)
+
+            if fit_type == 'linear_model':
+
+                # truncate x and y data
+                linear_regime_end = round(len(self.time) * perc_curve)
+                time_trunc = self.time[0:linear_regime_end] 
+                ydata_trunc = ydata[0:linear_regime_end]  
+
+                # fit linear model
+                bounds = Bounds(lb=np.array([0, 0]), ub=np.array([np.inf, np.inf]))
+                popt, pconv = curve_fit(GefFitter._linear_model, time_trunc, ydata_trunc, bounds=(bounds.lb, bounds.ub))
+                
+                # unpack parameters and organize
+                slope, yint = popt
+                slopes.append(slope)
+                fluorescence_plateaus.append(ydata[-1]) # this parameter is not fit, so just grab the last index of the ydata array
+                k_exchanges.append('NA')
+                k_backgrounds.append('NA')
+                span_exchanges.append('NA')
+                span_backgrounds.append('NA')
+                yints.append(yint)
+                pconvs.append(pconv)
+                vF0s.append(slope)
+
+            elif fit_type == 'exponential_model':
+                
+                span_exchange_est = ydata.max() - ydata.min()
+                k_exchange_est = 7e-3
+                fluorescence_plateau_est = ydata.min()
+                initial_guess = np.array([span_exchange_est, k_exchange_est, fluorescence_plateau_est])
+
+                bounds = Bounds(
+                    lb=np.array([span_exchange_est - 0.5 * span_exchange_est, 0, fluorescence_plateau_est - 0.2 * fluorescence_plateau_est])
+                )
+
+                popt, pconv = curve_fit(GefFitter._exponential_model, self.time, ydata, bounds=(bounds.lb, bounds.ub), p0=initial_guess)
+
+                # unpack parameters and organize
+                span_exchange, k_exchange, fluorescence_plateau = popt
+                slopes.append('NA')
+                fluorescence_plateaus.append(fluorescence_plateau)
+                k_exchanges.append(k_exchange)
+                k_backgrounds.append('NA')
+                span_exchanges.append(span_exchange)
+                span_backgrounds.append('NA')
+                yints.append('NA')
+                pconvs.append(pconv)
+                vF0s.append(span_exchange * k_exchange * np.exp(k_exchange * 0))            
+
+            elif fit_type == 'exponential_model_with_background':
+
+                row = initial_guesses[initial_guesses['sample'] == header]
+                span_exchange_est, k_exchange_est, span_background_est, k_background_est, fluorescence_plateau_est = row.iloc[0]['span_exchange_est'], row.iloc[0]['k_exchange_est'], row.iloc[0]['span_background_est'], 1e-4, row.iloc[0]['fluorescence_plateau_est']
+                initial_guess = np.array([span_exchange_est, k_exchange_est, span_background_est, k_background_est, fluorescence_plateau_est])
+
+                bounds = Bounds(
+                    lb=np.array([span_exchange_est - 0.05 * span_exchange_est, 5e-4, 0, 1e-5, fluorescence_plateau_est - 0.2 * fluorescence_plateau_est]), 
+                    ub=np.array([span_exchange_est + 0.05 * span_exchange_est, 0.1, ydata.max(), 3e-4, fluorescence_plateau_est + 0.2 * fluorescence_plateau_est])
+                )
+
+                print(f'Initial Guess and Bounds for {conc}:')
+                print(initial_guess)
+                print(bounds)
+                print('')
+
+                popt, pconv = curve_fit(GefFitter._exponential_model_with_background, self.time, ydata, bounds=(bounds.lb, bounds.ub), p0=initial_guess)
+
+
+                # unpack parameters and organize
+                span_exchange, k_exchange, span_background, k_background, fluorescence_plateau = popt
+                slopes.append('NA')
+                fluorescence_plateaus.append(fluorescence_plateau)
+                k_exchanges.append(k_exchange)
+                k_backgrounds.append(k_background)
+                span_exchanges.append(span_exchange)
+                span_backgrounds.append(span_background)
+                yints.append('NA')
+                pconvs.append(pconv)
+                vF0s.append(span_exchange * k_exchange * np.exp(k_exchange * 0))           
+
+            else:
+                print(f'Fit type "{fit_type}" not recognized.')
+                return 
+            
+        # update data index with summary of the fits
+        self.data_index['slope'] = slopes
+        self.data_index['yint'] = yints
+        self.data_index['fluorescence_plateau'] = fluorescence_plateaus
+        self.data_index['k_exchange'] = k_exchanges
+        self.data_index['k_background'] = k_backgrounds
+        self.data_index['span_exchange'] = span_exchanges
+        self.data_index['span_background'] = span_backgrounds
+        self.data_index['pconv'] = pconvs
+        self.data_index['vF0'] = vF0s
 
         # 2DO: add some plotting functionality and attributes for storing fit statistics
         if plot:
