@@ -6,6 +6,7 @@ import ipywidgets as widgets
 from scipy.stats import linregress
 from matplotlib import pyplot as plt
 from scipy.optimize import curve_fit, Bounds
+from sklearn.linear_model import LinearRegression
 from IPython.display import display, clear_output
 
 # mute annoying pandas warnings
@@ -13,10 +14,83 @@ import warnings
 warnings.filterwarnings("ignore", category=pd.core.common.SettingWithCopyWarning)
 
 
-
 # 2DO: make the code more flexible by enabling usage of custom models
-# Can include some in the library for the GEF-specific case
-# Add a feature for collapsing plots
+# Integrate manual initial guess as a kwarg instead of a separate function
+
+def divide_chunks(l, n):
+    """
+    Taken from the kinetic_analysis library: 
+    https://github.com/pinneylab/kinetic_analysis/tree/main
+
+    Function to split a list 'l' into 'n' equal-sized chunks.
+    The function yields each chunk as a separate list.
+    It ensures that no chunk is larger than the original list.
+    """
+
+    chunk_size = len(l) // n
+    remainder = len(l) % n
+    start = 0
+    for i in range(n):
+        if i < remainder:
+            end = start + chunk_size + 1
+        else:
+            end = start + chunk_size
+        yield l[start:end]
+        start = end
+
+def compute_initial_reaction_slope(time_arr: np.array, 
+                                   signal_arr: np.array,
+                                  min_included_percent: int = 2): 
+    """
+    Taken from the kinetic_analysis library: 
+    https://github.com/pinneylab/kinetic_analysis/tree/main
+
+    Determines best linear fit to initial slope of data, by fitting regressions to 
+    all percentiles of the data--greater than some defined minimum--anchored at the origin.
+    
+    Args:
+        time_arr (np.array): array of assay read times
+        signal_arr (np.array): array of kinetic signal readouts
+        min_included_percent (int) = 5: minimum percent of data to be included 
+    
+    Returns:
+        slope, intercept, score ((float, float, float)): fit parameters of best fit
+    """
+
+    # Need to triage further for different definitions of minimum
+    MIN_INCLUDED_DATA_POINTS = 3
+    
+    perc_concs = list(divide_chunks(signal_arr, 100))
+    perc_times = list(divide_chunks(time_arr, 100))
+ 
+    scores = []
+    slopes = [] 
+    intercepts = []
+    
+    min_inclusion = max(len(perc_times) * min_included_percent // 100, MIN_INCLUDED_DATA_POINTS)
+    
+    #for i in range(len(perc_times), min_inclusion, -1):
+    for i in range(min_inclusion, len(perc_times), 1):
+        curr_times = np.concatenate(perc_times[:i])
+        curr_concs = np.concatenate(perc_concs[:i])
+        reg = LinearRegression().fit(np.array(curr_times).reshape(-1,1), curr_concs)
+        curr_score = reg.score(np.array(curr_times).reshape(-1,1), curr_concs)
+        scores.append(curr_score)
+        slopes.append(reg.coef_)
+        intercepts.append(reg.intercept_)
+    
+    if len(scores) == 0 and min_included_percent == 100:
+        reg = LinearRegression().fit(np.array(perc_times).reshape(-1,1), perc_concs)
+        curr_score = reg.score(np.array(perc_times).reshape(-1,1), perc_concs)
+        return reg.coef_.item(), reg.intercept_.item(), curr_score
+
+    # The fit with the highest R-squared value is selected as the best fit.
+    max_r2_idx = np.argmax(scores)
+    
+    if scores[max_r2_idx] < 0.9:
+        return np.array([np.nan]), np.nan, np.array([np.nan])
+    
+    return slopes[max_r2_idx], intercepts[max_r2_idx], scores[max_r2_idx]
 
 class GefFitter:
     """
@@ -98,25 +172,22 @@ class GefFitter:
     def _michaelis_menten_model(substrate_concens: np.ndarray, Vmax: float, Km: float):
         return np.divide(Vmax * substrate_concens, Km + substrate_concens)
 
-    def _plot_progress_curves_and_fits(self, axs, xlabel, ylabel, palette):
-
+    def _plot_progress_curves_and_fits(self, xlabel, ylabel, palette, width_per_plot, height_per_plot):
+        
+        plot_data = []
         if not palette:
             palette = list(sns.color_palette("BuPu_r", len(self.ydatas)))
             palette.reverse()
 
-        # re-format the data for seaborn plotting
-        label_list, time_list, progress_list = [], [], []
-        for index, ax in enumerate(axs.flatten()[1:]):
-            header = self.headers[index]
+        colors, ydata, labels = [], [], []
+        for index, header in enumerate(self.headers):
             conc, _, model, _, _ = self._get_fit_inputs(header)
             slope, F0, fluorescence_plateau, k_exchange, k_background, span_exchange, span_background, pconv, vF0 = self._get_fit_outputs(header)
             progress_curve = self.ydatas[self.headers.index(header)]
 
-            # plot individual progress curve
-            ax.set_title('{}; [S]={}µM'.format(header, conc))
-            ax.set_xlabel(xlabel)
-            ax.set_ylabel(ylabel)
-            ax.plot(self.time, progress_curve, color=palette[index])
+            title = '{}; [S]={:.2f}µM; {}'.format(header, conc, model) + '\n$vF_{0} = $' + '{:.2f}'.format(vF0)
+            color = palette[index]
+            label = '{:.2f} µM'.format(conc)
 
             # plot fit to progress curve
             if model == 'linear_model':
@@ -128,25 +199,32 @@ class GefFitter:
             elif model == 'exponential_model_with_background':
                 y_pred = GefFitter._exponential_model_with_background(self.time, span_exchange, k_exchange, span_background, k_background, fluorescence_plateau)
 
-            ax.plot(self.time, y_pred, color='black')
+            colors.append(color)
+            labels.append(label)
+            ydata.append(progress_curve)
 
-            label_list += [conc] * len(progress_curve)
-            time_list += list(self.time) 
-            progress_list += list(progress_curve)
+            plot_data.append({
+                'title': title,
+                'colors': [color],
+                'ypreds': [y_pred],
+                'labels': [label],
+                'ydata': [progress_curve]
+            })
 
-        df = pd.DataFrame({'[S] (µM)': label_list, ylabel: progress_list, xlabel: time_list})
-        
-        # plot all progress curves on the main plot
-        main_ax = axs.flatten()[0]
-        sns.lineplot(ax=main_ax, data=df, x=xlabel, y=ylabel, hue='[S] (µM)', palette=palette)
-        main_ax.set_title('Progress Curves')
-        plt.close()
+        plot_data.insert(0, {
+            'title': 'Progress Curves',
+            'colors': colors,
+            'ypreds': [],
+            'labels': labels,
+            'ydata': ydata
+        })
 
         # launch an interactive figure
-        self._launch_interactive_figure(axs.flatten())
+        self._launch_interactive_figure(plot_data, xlabel, ylabel, width_per_plot, height_per_plot)
 
-    def _launch_interactive_figure(self, plots):
-
+    def _launch_interactive_figure(self, plot_data, xlabel, ylabel, width_per_plot, height_per_plot):
+        
+        sns.set_style('ticks')
         prev_button = widgets.Button(description="Previous")
         next_button = widgets.Button(description="Next")
 
@@ -156,15 +234,21 @@ class GefFitter:
         def display_plot(index):
             with output:
                 clear_output(wait=True)
-                fig, ax = plt.subplots(figsize=(8, 6))
-                for line in plots[self.current_index].lines:
-                    new_line = ax.plot(line.get_xdata(), line.get_ydata(), label=line.get_label(), color=line.get_color())
-                    new_line[0].set_linestyle(line.get_linestyle())
-                ax.set_xlim(plots[self.current_index].get_xlim())
-                ax.set_ylim(plots[self.current_index].get_ylim())
-                ax.set_xlabel(plots[self.current_index].get_xlabel())
-                ax.set_ylabel(plots[self.current_index].get_ylabel())
-                ax.set_title(plots[self.current_index].get_title())
+                fig, ax = plt.subplots(figsize=(width_per_plot, height_per_plot))
+
+                if index == 0:
+                    ax.set_title(plot_data[index]['title'])
+                    for progress_curve, label, color,  in zip(plot_data[index]['ydata'], plot_data[index]['labels'], plot_data[index]['colors']):
+                        ax.plot(self.time, progress_curve, label=label, color=color)
+
+                else:
+                    ax.set_title(plot_data[index]['title'])
+                    ax.plot(self.time, plot_data[index]['ydata'][0], color=plot_data[index]['colors'][0])
+                    ax.plot(self.time, plot_data[index]['ypreds'][0], color='black')
+
+                ax.set_xlabel(xlabel)
+                ax.set_ylabel(ylabel)
+
                 plt.show()
 
         def on_prev_button_clicked(b):
@@ -173,7 +257,7 @@ class GefFitter:
             display_plot(self.current_index)
 
         def on_next_button_clicked(b):
-            if self.current_index < len(plots) - 1:
+            if self.current_index < len(plot_data) - 1:
                 self.current_index += 1
             display_plot(self.current_index)
 
@@ -182,7 +266,7 @@ class GefFitter:
         next_button.on_click(on_next_button_clicked)
 
         # Display widgets and initial plot
-        display(widgets.HBox([prev_button, next_button]), output)
+        display(widgets.HBox([prev_button, next_button], layout={'justify_content': 'center'}), output)
         display_plot(self.current_index)
 
     def fit_initial_rates(self, 
@@ -192,8 +276,7 @@ class GefFitter:
                           ylabel="Trp Fluorescence (RFUs)",
                           height_per_plot=10,
                           width_per_plot=10,
-                          palette:list=None,
-                          image_path:str=None):
+                          palette:list=None):
         
         # parse through input data to obtain substrate and enzyme concentrations
         slopes, fluorescence_plateaus, k_exchanges, k_backgrounds, span_exchanges, span_backgrounds, pconvs, vF0s, F0s = [], [], [], [], [], [], [], [], []
@@ -202,17 +285,25 @@ class GefFitter:
 
             if fit_type == 'linear_model':
 
-                # truncate x and y data
-                linear_regime_end = round(len(self.time) * perc_curve)
-                time_trunc = self.time[0:linear_regime_end] 
-                ydata_trunc = ydata[0:linear_regime_end]  
+                if type(perc_curve) == float:
 
-                # fit linear model
-                bounds = Bounds(lb=np.array([0, 0]), ub=np.array([np.inf, np.inf]))
-                popt, pconv = curve_fit(GefFitter._linear_model, time_trunc, ydata_trunc, bounds=(bounds.lb, bounds.ub))
+                    # truncate x and y data
+                    linear_regime_end = round(len(self.time) * perc_curve)
+                    time_trunc = self.time[0:linear_regime_end] 
+                    ydata_trunc = ydata[0:linear_regime_end]  
+
+                    # fit linear model
+                    bounds = Bounds(lb=np.array([0, 0]), ub=np.array([np.inf, np.inf]))
+                    popt, pconv = curve_fit(GefFitter._linear_model, time_trunc, ydata_trunc, bounds=(bounds.lb, bounds.ub))
+                    slope, yint = popt
+
+                else:
+                    slopes_out, yint, r2 = compute_initial_reaction_slope(self.time, ydata, min_included_percent=2)
+                    # print(slopes, yint)
+                    slope = slopes_out[0] * -1
+                    pconv = 'NA'
                 
-                # unpack parameters and organize
-                slope, yint = popt
+                # organize parameters
                 slopes.append(slope)
                 fluorescence_plateaus.append(ydata[-1]) # this parameter is not fit, so just grab the last index of the ydata array
                 k_exchanges.append('NA')
@@ -308,12 +399,7 @@ class GefFitter:
 
         # 2DO: add some plotting functionality and attributes for storing fit statistics
         if plot:
-            fig, axs = plt.subplots(nrows=len(self.ydatas) + 1, ncols=1, figsize=(width_per_plot, height_per_plot * len(self.ydatas) + 1))                   
-            sns.set_style('ticks')
-            self._plot_progress_curves_and_fits(axs, xlabel, ylabel, palette)
-
-            if image_path:
-                plt.savefig(image_path, dpi=300)
+            self._plot_progress_curves_and_fits(xlabel, ylabel, palette, width_per_plot, height_per_plot)
 
     def fit_initial_rates_manual_guess(self, 
                           initial_guesses: pd.DataFrame,
@@ -423,18 +509,7 @@ class GefFitter:
 
         # 2DO: add some plotting functionality and attributes for storing fit statistics
         if plot:
-            if layout == "portrait":
-                fig, axs = plt.subplots(nrows=len(self.ydatas) + 1, ncols=1, figsize=(width_per_plot, height_per_plot * len(self.ydatas) + 1))
-            elif layout == "landscape":
-                fig, axs = plt.subplots(nrows=1, ncols=len(self.ydatas) + 1, figsize=(width_per_plot * len(self.ydatas) + 1, height_per_plot))
-            else:
-                print(f'ERROR: {layout} not a recognized value for layout parameter. Accepted values include: "portrait", "landscape".')
-                                        
-            sns.set_style('ticks')
-            self._plot_progress_curves_and_fits(axs, xlabel, ylabel, palette)
-
-            if image_path:
-                plt.savefig(image_path, dpi=300)
+            self._plot_progress_curves_and_fits(xlabel, ylabel, palette, width_per_plot, height_per_plot)
 
     def fit_conversion_factor(self, plot:bool=False, image_path:str=None):
         """
