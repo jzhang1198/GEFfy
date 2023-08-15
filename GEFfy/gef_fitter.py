@@ -3,7 +3,7 @@ import pandas as pd
 import numpy as np
 import seaborn as sns
 import ipywidgets as widgets
-from scipy.stats import linregress
+from scipy.stats import linregress, chisquare
 from matplotlib import pyplot as plt
 from scipy.optimize import curve_fit, Bounds
 from sklearn.linear_model import LinearRegression
@@ -139,6 +139,11 @@ class GefFitter:
         self.conversion_factor_fit = None
         self.Km = float
         self.kcat = float
+
+        self.Km_sse_squared_array = np.ndarray
+        self.Km_array = np.ndarray
+        self.kcat_sse_squared_array = np.ndarray
+        self.kcat_array = np.ndarray
 
     def _get_fit_inputs(self, sample_id: str):
         row = self.data_index[self.data_index['sample'] == sample_id]
@@ -589,3 +594,56 @@ class GefFitter:
 
             if image_path:
                 plt.savefig(image_path, dpi=300)
+
+    def generate_sse_surfaces_MM(self, 
+                                 plot:bool=False, 
+                                 image_path:str=None, 
+                                 n_points:int=30, 
+                                 height_per_plot=10, 
+                                 width_per_plot=10,):
+        
+        initial_velocities = self.data_index['vF0'].to_numpy() * self.conversion_factor_fit.slope # convert to molar concentration
+        substrate_concens = self.data_index['conc'].to_numpy() 
+        gef_concs = list(set(self.data_index['GEF_conc']))
+        gef_conc = gef_concs.pop()
+
+        # compute surface ranging over 2-fold below and above the Km
+        Km_array = np.linspace(self.Km / 2, self.Km * 2, n_points)
+        Km_sse_squared_array = []
+        for Km in Km_array:
+            wrapper = lambda substrate_concens, Vmax: GefFitter._michaelis_menten_model(substrate_concens, Vmax, Km)
+            Vmax, _ = curve_fit(wrapper, substrate_concens, initial_velocities)
+            y_hat = GefFitter._michaelis_menten_model(substrate_concens, Vmax, Km)
+            sse = np.square(y_hat - initial_velocities).sum()
+            Km_sse_squared_array.append(sse)
+            
+        # compute surface ranging over 2-fold below and above the kcat
+        kcat_array = np.linspace(self.kcat / 2, self.kcat * 2, n_points)
+        kcat_sse_squared_array = []
+        for kcat in kcat_array:
+            wrapper = lambda substrate_concens, Km: GefFitter._michaelis_menten_model(substrate_concens, kcat * (gef_conc / 1000), Km)
+            Km, _ = curve_fit(wrapper, substrate_concens, initial_velocities)
+            y_hat = GefFitter._michaelis_menten_model(substrate_concens, kcat * (gef_conc / 1000), Km)
+            sse = np.square(y_hat - initial_velocities).sum()
+            kcat_sse_squared_array.append(sse)
+                    
+        self.Km_sse_squared_array = np.array(Km_sse_squared_array)
+        self.Km_array = Km_array
+        self.kcat_sse_squared_array = np.array(kcat_sse_squared_array)
+        self.kcat_array = kcat_array
+
+        if plot:
+
+            fig, axs = plt.subplots(nrows=1, ncols=2, figsize=(width_per_plot * 2, height_per_plot))
+            axs[0].set_title(r'$K_{m}$ SSE Surface')
+            axs[0].set_xlabel(r'$K_{m}$' + ' (µM)')
+            axs[0].set_ylabel('SSE')
+            axs[1].set_title(r'$k_{cat}$ SSE Surface')
+            axs[1].set_xlabel(r'$k_{cat}$' + ' $s^{-1}$')
+            axs[1].set_ylabel('SSE')
+            axs[0].scatter(self.Km_array, self.Km_sse_squared_array, color='black')
+            axs[1].scatter(self.kcat_array, self.kcat_sse_squared_array, color='black')
+
+            if image_path:
+                plt.savefig(os.path.join(image_path), dpi=300)
+
