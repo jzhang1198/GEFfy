@@ -3,7 +3,7 @@ import pandas as pd
 import numpy as np
 import seaborn as sns
 import ipywidgets as widgets
-from scipy.stats import linregress, chisquare
+from scipy.stats import linregress
 from matplotlib import pyplot as plt
 from scipy.optimize import curve_fit, Bounds
 from sklearn.linear_model import LinearRegression
@@ -544,6 +544,7 @@ class GefFitter:
             ax.plot(x, (self.conversion_factor_fit.slope * x) + self.conversion_factor_fit.intercept, color='blue')      
             ax.set_ylabel('Concentration (µM)')
             ax.set_xlabel('Trp Fluorescence (RFUs)')  
+            ax.set_title('Conversion Factor Standard Curve')
             text = '\n'.join([
                 'm = {:.2e}'.format(self.conversion_factor_fit.slope),
                 '$y_{int}$ ' + '= {:.2f}'.format(self.conversion_factor_fit.intercept),
