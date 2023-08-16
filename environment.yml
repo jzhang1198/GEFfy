@@ -10,4 +10,6 @@ dependencies:
   - scipy=1.7.3
   - seaborn=0.11.2
   - flit=3.6.0
+  - ipywidgets=7.6.3
+  - scikit-learn=1.0.2
 prefix: /opt/anaconda3/envs/kinetics-simulator
