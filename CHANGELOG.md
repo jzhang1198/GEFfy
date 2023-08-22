@@ -9,6 +9,8 @@ Update to interactive plots for improved efficiency.
 
 Automated selection of linear phase of progress curves in linear fit methods.
 
+Populated `gap_fitter.py` with classes and methods for fitting the integrated MM equation to hydrolysis progress curves.
+
 ## GEFfy version 0.1.1
 
 Class for fitting initial rates, conversion factors, and steady-state kinetic
